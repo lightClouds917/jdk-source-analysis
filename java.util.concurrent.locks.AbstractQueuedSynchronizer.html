@@ -445,12 +445,13 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <li><a href="#_abstractqueuedsynchronizer">1. AbstractQueuedSynchronizer</a>
 <ul class="sectlevel2">
 <li><a href="#_clh_lock_queue_介绍">1.1. CLH lock queue 介绍</a></li>
-<li><a href="#_node_详解">1.2. <code>Node</code> 详解</a>
+<li><a href="#_核心点">1.2. 核心点</a></li>
+<li><a href="#_node_详解">1.3. <code>Node</code> 详解</a>
 <ul class="sectlevel3">
-<li><a href="#_node_中一些常量定义">1.2.1. <code>Node</code> 中一些常量定义</a></li>
+<li><a href="#_node_中一些常量定义">1.3.1. <code>Node</code> 中一些常量定义</a></li>
 </ul>
 </li>
-<li><a href="#_参考资料">1.3. 参考资料</a></li>
+<li><a href="#_参考资料">1.4. 参考资料</a></li>
 </ul>
 </li>
 </ul>
@@ -468,6 +469,11 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </div>
 <div class="sect2">
 <h3 id="_clh_lock_queue_介绍"><a class="anchor" href="#_clh_lock_queue_介绍"></a>1.1. CLH lock queue 介绍</h3>
+<div class="imageblock">
+<div class="content">
+<img src="./images/AbstractQueuedSynchronizer-CLH-queue.png" alt="AbstractQueuedSynchronizer CLH queue">
+</div>
+</div>
 <div class="paragraph">
 <p>终于看明白了 CLH lock queue。CLH 通过自旋来锁定当前节点。自旋的好处是线程不需要睡眠和唤醒，减小了系统调用的开销。</p>
 </div>
@@ -479,9 +485,180 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </div>
 </div>
 <div class="sect2">
-<h3 id="_node_详解"><a class="anchor" href="#_node_详解"></a>1.2. <code>Node</code> 详解</h3>
+<h3 id="_核心点"><a class="anchor" href="#_核心点"></a>1.2. 核心点</h3>
+<div class="olist arabic">
+<ol class="arabic">
+<li>
+<p>模板方法模式</p>
+<div class="olist loweralpha">
+<ol class="loweralpha" type="a">
+<li>
+<p><code>boolean tryAcquire(int arg)</code></p>
+</li>
+<li>
+<p><code>boolean tryRelease(int arg)</code></p>
+</li>
+<li>
+<p><code>int tryAcquireShared(int arg)</code></p>
+</li>
+<li>
+<p><code>boolean tryReleaseShared(int arg)</code></p>
+</li>
+<li>
+<p><code>boolean isHeldExclusively()</code></p>
+</li>
+</ol>
+</div>
+</li>
+</ol>
+</div>
+<div class="paragraph">
+<p>基于 <code>AbstractQueuedSynchronizer</code>，我们实现一个互斥锁：</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-java" data-lang="java">package com.diguage.truman.concurrent;
+
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.AbstractQueuedSynchronizer;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
+
+/**
+ * @author D瓜哥, https://www.diguage.com/
+ * @since 2020-03-31 10:27
+ */
+public class Mutex implements Lock {
+
+    private static class Sync extends AbstractQueuedSynchronizer {
+        @Override
+        protected boolean tryAcquire(int arg) {
+            if (compareAndSetState(0, 1)) {
+                setExclusiveOwnerThread(Thread.currentThread());
+                return true;
+            }
+            return false;
+        }
+
+        @Override
+        protected boolean tryRelease(int arg) {
+            if (getState() == 0) {
+                throw new IllegalMonitorStateException();
+            }
+            setExclusiveOwnerThread(null);
+            setState(0);
+            return true;
+        }
+
+        @Override
+        protected boolean isHeldExclusively() {
+            return getState() == 1;
+        }
+
+        Condition newCodition() {
+            return new ConditionObject();
+        }
+    }
+
+    private final Sync sync = new Sync();
+
+    @Override
+    public void lock() {
+        sync.acquire(1);
+    }
+
+    @Override
+    public void lockInterruptibly() throws InterruptedException {
+        sync.acquireInterruptibly(1);
+    }
+
+    @Override
+    public boolean tryLock() {
+        return sync.tryAcquire(1);
+    }
+
+    @Override
+    public boolean tryLock(long time, TimeUnit unit) throws InterruptedException {
+        return sync.tryAcquireSharedNanos(1, unit.toNanos(time));
+    }
+
+    @Override
+    public void unlock() {
+        sync.release(1);
+    }
+
+    @Override
+    public Condition newCondition() {
+        return sync.newCodition();
+    }
+
+    public boolean isLocked() {
+        return sync.isHeldExclusively();
+    }
+
+    public boolean hasQueuedThreads() {
+        return sync.hasQueuedThreads();
+    }
+}</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>互斥锁，也可以称为独占锁，顾名思义就是同一个时刻只能有一个线程获取到锁，而其他获取锁的线程只能在同步队列中等待，只有获取锁的线程释放了锁，后继的线程才能获取锁。</p>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-java" data-lang="java">package com.diguage.truman.concurrent;
+
+import org.junit.Test;
+
+import java.util.Random;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+/**
+ * @author D瓜哥, https://www.diguage.com/
+ * @since 2020-03-31 11:41
+ */
+public class AbstractQueuedSynchronizerTest {
+    @Test
+    public void test() throws InterruptedException {
+        Mutex mutex = new Mutex();
+        ExecutorService executorService = Executors.newFixedThreadPool(5);
+        for (int i = 0; i &lt; 10; i++) {
+            executorService.execute(() -&gt; {
+                try {
+                    int time = new Random().nextInt(5000);
+                    mutex.lock();
+                    System.out.printf("thread=%d running time=%d%n",
+                            Thread.currentThread().getId(), time);
+                    Thread.sleep(time);
+                    System.out.printf("thread=%d finished%n",
+                            Thread.currentThread().getId());
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                } finally {
+                    mutex.unlock();
+
+                }
+            });
+        }
+        executorService.shutdown();
+        while (executorService.isTerminated()) {
+        }
+        Thread.sleep(50000);
+        System.out.println("All task were finished.");
+    }
+}</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>运行结果显示，指定时刻，只有一个线程在运行。</p>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_node_详解"><a class="anchor" href="#_node_详解"></a>1.3. <code>Node</code> 详解</h3>
 <div class="sect3">
-<h4 id="_node_中一些常量定义"><a class="anchor" href="#_node_中一些常量定义"></a>1.2.1. <code>Node</code> 中一些常量定义</h4>
+<h4 id="_node_中一些常量定义"><a class="anchor" href="#_node_中一些常量定义"></a>1.3.1. <code>Node</code> 中一些常量定义</h4>
 <div class="paragraph">
 <p>区分共享锁还是独占式锁的常量，是如何被使用的？独占锁为何没有初始化？</p>
 </div>
@@ -520,10 +697,32 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </li>
 </ol>
 </div>
+<div class="paragraph">
+<p>模板方法：</p>
+</div>
+<div class="olist arabic">
+<ol class="arabic">
+<li>
+<p><code>isHeldExclusively()</code>&#8201;&#8212;&#8201;该线程是否正在独占资源。只有用到condition才需要去实现它。</p>
+</li>
+<li>
+<p><code>tryAcquire(int)</code>&#8201;&#8212;&#8201;独占方式。尝试获取资源，成功则返回true，失败则返回false。</p>
+</li>
+<li>
+<p><code>tryRelease(int)</code>&#8201;&#8212;&#8201;独占方式。尝试释放资源，成功则返回true，失败则返回false。</p>
+</li>
+<li>
+<p><code>tryAcquireShared(int)</code>&#8201;&#8212;&#8201;共享方式。尝试获取资源。负数表示失败；0表示成功，但没有剩余可用资源；正数表示成功，且有剩余资源。</p>
+</li>
+<li>
+<p><code>tryReleaseShared(int)</code>&#8201;&#8212;&#8201;共享方式。尝试释放资源，成功则返回true，失败则返回false。</p>
+</li>
+</ol>
+</div>
 </div>
 </div>
 <div class="sect2">
-<h3 id="_参考资料"><a class="anchor" href="#_参考资料"></a>1.3. 参考资料</h3>
+<h3 id="_参考资料"><a class="anchor" href="#_参考资料"></a>1.4. 参考资料</h3>
 <div class="admonitionblock warning">
 <table>
 <tr>
@@ -538,6 +737,12 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </div>
 <div class="olist arabic">
 <ol class="arabic">
+<li>
+<p><a href="https://www.cnblogs.com/waterystone/p/4920797.html">Java并发之AQS详解 - waterystone - 博客园</a></p>
+</li>
+<li>
+<p><a href="https://www.cnblogs.com/chengxiao/archive/2017/07/24/7141160.html">Java并发包基石-AQS详解 - dreamcatcher-cx - 博客园</a></p>
+</li>
 <li>
 <p><a href="http://www.cnblogs.com/leesf456/p/5350186.html">【JUC】JDK1.8源码分析之AbstractQueuedSynchronizer（二） - leesf - 博客园</a></p>
 </li>
@@ -585,7 +790,7 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2019-11-23 14:33:42 +0800
+Last updated 2020-03-31 16:06:49 +0800
 </div>
 </div>
 </body>

@@ -445,10 +445,15 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <li><a href="#_threadpoolexecutor_源码分析">1. ThreadPoolExecutor 源码分析</a>
 <ul class="sectlevel2">
 <li><a href="#_大纲">1.1. 大纲</a></li>
-<li><a href="#_问题">1.2. 问题</a></li>
-<li><a href="#_需要注意的点">1.3. 需要注意的点</a></li>
-<li><a href="#_收获">1.4. 收获</a></li>
-<li><a href="#_参考资料">1.5. 参考资料</a></li>
+<li><a href="#_核心点">1.2. 核心点</a></li>
+<li><a href="#_问题">1.3. 问题</a>
+<ul class="sectlevel3">
+<li><a href="#_tomcat_改进">1.3.1. Tomcat 改进</a></li>
+</ul>
+</li>
+<li><a href="#_需要注意的点">1.4. 需要注意的点</a></li>
+<li><a href="#_收获">1.5. 收获</a></li>
+<li><a href="#_参考资料">1.6. 参考资料</a></li>
 </ul>
 </li>
 </ul>
@@ -458,6 +463,11 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <div class="sect1">
 <h2 id="_threadpoolexecutor_源码分析"><a class="anchor" href="#_threadpoolexecutor_源码分析"></a>1. ThreadPoolExecutor 源码分析</h2>
 <div class="sectionbody">
+<div class="imageblock">
+<div class="content">
+<img src="./images/ThreadPoolExecutor-process.png" alt="ThreadPoolExecutor process">
+</div>
+</div>
 <div class="sect2">
 <h3 id="_大纲"><a class="anchor" href="#_大纲"></a>1.1. 大纲</h3>
 <div class="olist arabic">
@@ -511,7 +521,61 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </div>
 </div>
 <div class="sect2">
-<h3 id="_问题"><a class="anchor" href="#_问题"></a>1.2. 问题</h3>
+<h3 id="_核心点"><a class="anchor" href="#_核心点"></a>1.2. 核心点</h3>
+<div class="olist arabic">
+<ol class="arabic">
+<li>
+<p>关键参数</p>
+<div class="olist loweralpha">
+<ol class="loweralpha" type="a">
+<li>
+<p><code>corePoolSize</code></p>
+</li>
+<li>
+<p><code>maximumPoolSize</code></p>
+</li>
+<li>
+<p><code>BlockingQueue</code></p>
+</li>
+<li>
+<p><code>RejectedExecutionHandler</code></p>
+</li>
+<li>
+<p><code>keepAliveTime</code></p>
+</li>
+<li>
+<p><code>threadFactory</code></p>
+</li>
+</ol>
+</div>
+</li>
+<li>
+<p><code>RejectedExecutionHandler</code></p>
+<div class="olist loweralpha">
+<ol class="loweralpha" type="a">
+<li>
+<p><code>AbortPolicy</code></p>
+</li>
+<li>
+<p><code>CallerRunsPolicy</code></p>
+</li>
+<li>
+<p><code>DiscardPolicy</code></p>
+</li>
+<li>
+<p><code>DiscardOldestPolicy</code></p>
+</li>
+</ol>
+</div>
+</li>
+</ol>
+</div>
+<div class="paragraph">
+<p>在生产环境，为了避免首次调用超时，可以调用 <code>executor.prestartAllCoreThreads()</code> 预创建所有 <code>core</code> 线程，避免来一个创一个带来首次调用慢的问题。</p>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_问题"><a class="anchor" href="#_问题"></a>1.3. 问题</h3>
 <div class="olist arabic">
 <ol class="arabic">
 <li>
@@ -532,11 +596,62 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <li>
 <p>这个线程池还有哪些可以改进的地方？比如 Guava 中提供了哪些线程池？</p>
 </li>
+<li>
+<p>如何改造成添加任务，如果没有达到 <code>maxPoolSize</code> 则先创建线程？</p>
+</li>
 </ol>
+</div>
+<div class="sect3">
+<h4 id="_tomcat_改进"><a class="anchor" href="#_tomcat_改进"></a>1.3.1. Tomcat 改进</h4>
+<div class="paragraph">
+<p>可不可以自己封装一个Queue，在插入时增加以下逻辑呢？</p>
+</div>
+<div class="ulist">
+<ul>
+<li>
+<p>如果当前有空闲线程等待接客，则把任务加入队列让孩儿们去抢。</p>
+</li>
+<li>
+<p>如果没有空闲的了，总线程数又没到达max，那就返回false，让Executor去创建线程。</p>
+</li>
+<li>
+<p>如果总线程数已达到max，则继续把任务加入队列缓冲一下。</p>
+</li>
+<li>
+<p>如果缓冲队列也满了，抛出拒绝异常。</p>
+</li>
+</ul>
+</div>
+<div class="listingblock">
+<div class="title"><a href="https://github.com/apache/tomcat/blob/master/java/org/apache/tomcat/util/threads/TaskQueue.java" class="bare">https://github.com/apache/tomcat/blob/master/java/org/apache/tomcat/util/threads/TaskQueue.java</a></div>
+<div class="content">
+<pre class="highlight"><code class="language-java" data-lang="java">public class TaskQueue extends LinkedBlockingQueue&lt;Runnable&gt; {
+
+    private transient volatile ThreadPoolExecutor parent = null;
+
+    @Override
+    public boolean offer(Runnable o) {
+      //we can't do any checks
+        if (parent==null) return super.offer(o);
+        //we are maxed out on threads, simply queue the object
+        if (parent.getPoolSize() == parent.getMaximumPoolSize()) return super.offer(o);
+        //we have idle threads, just add it to the queue
+        if (parent.getSubmittedCount()&lt;=(parent.getPoolSize())) return super.offer(o);
+        //if we have less threads than maximum force creation of a new thread
+        if (parent.getPoolSize()&lt;parent.getMaximumPoolSize()) return false;
+        //if we reached here, we need to add it to the queue
+        return super.offer(o);
+    }
+}</code></pre>
+</div>
+</div>
+<div class="paragraph">
+<p>如何判断当前有没有空闲的线程等待接客？Tomcat 则靠扩展 <code>Executor</code>，增加一个当前请求数的计数器，在 <code>execute()</code> 方法前加1，再重载 <code>afterExecute()</code> 方法减1，然后判断当前线程总数是否大于当前请求总数就知道有咩有围观群众。</p>
+</div>
 </div>
 </div>
 <div class="sect2">
-<h3 id="_需要注意的点"><a class="anchor" href="#_需要注意的点"></a>1.3. 需要注意的点</h3>
+<h3 id="_需要注意的点"><a class="anchor" href="#_需要注意的点"></a>1.4. 需要注意的点</h3>
 <div class="olist arabic">
 <ol class="arabic">
 <li>
@@ -579,7 +694,7 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </div>
 </div>
 <div class="sect2">
-<h3 id="_收获"><a class="anchor" href="#_收获"></a>1.4. 收获</h3>
+<h3 id="_收获"><a class="anchor" href="#_收获"></a>1.5. 收获</h3>
 <div class="olist arabic">
 <ol class="arabic">
 <li>
@@ -590,26 +705,156 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </li>
 </ol>
 </div>
+<div class="listingblock">
+<div class="content">
+<pre class="highlight"><code class="language-java" data-lang="java">package com.diguage.truman.concurrent;
+
+import org.junit.Test;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.*;
+
+/**
+ * @author D瓜哥, https://www.diguage.com/
+ * @since 2020-03-10 10:50
+ */
+public class ThreadPoolExecutorTest {
+    @Test
+    public void testPoolSize() {
+        ThreadPoolExecutor executorService
+                = new ThreadPoolExecutor(2, 4, 1L,
+                TimeUnit.MINUTES, new LinkedBlockingQueue&lt;&gt;(6));
+
+        for (int i = 0; i &lt; 10; i++) {
+            executorService.execute(new Task("Task-" + i));
+        }
+        executorService.shutdown();
+        while (!executorService.isTerminated()) {
+        }
+        System.out.println("Finish all thread...");
+    }
+
+    @Test
+    public void testCallable() {
+        ThreadPoolExecutor executorService
+                = new ThreadPoolExecutor(2, 4, 1L,
+                TimeUnit.MINUTES, new LinkedBlockingQueue&lt;&gt;(6));
+
+        List&lt;Future&lt;String&gt;&gt; futures = new ArrayList&lt;&gt;(10);
+        for (int i = 0; i &lt; 10; i++) {
+            Future&lt;String&gt; future = executorService.submit(
+                    new CallableTask("CallableTask-" + i));
+
+            futures.add(future);
+        }
+        for (Future&lt;String&gt; future : futures) {
+            try {
+                System.out.println(LocalDateTime.now() + "::" + future.get());
+            } catch (InterruptedException | ExecutionException e) {
+                e.printStackTrace();
+            }
+        }
+        while (!executorService.isTerminated()) {
+        }
+        System.out.println("Finish all thread...");
+    }
+
+    @Test
+    public void testComplete() {
+        ThreadPoolExecutor executorService
+                = new ThreadPoolExecutor(2, 4, 1L,
+                TimeUnit.MINUTES, new LinkedBlockingQueue&lt;&gt;(6));
+
+        List&lt;Future&lt;String&gt;&gt; futures = new ArrayList&lt;&gt;(10);
+        for (int i = 0; i &lt; 10; i++) {
+            Future&lt;String&gt; future = executorService.submit(
+                    new CallableTask("CallableTask-" + i));
+            futures.add(future);
+        }
+        for (Future&lt;String&gt; future : futures) {
+            try {
+                System.out.println(LocalDateTime.now() + "::" + future.get());
+            } catch (InterruptedException | ExecutionException e) {
+                e.printStackTrace();
+            }
+        }
+        while (!executorService.isTerminated()) {
+        }
+        System.out.println("Finish all thread...");
+    }
+
+    public static class CallableTask implements Callable&lt;String&gt; {
+        private final String name;
+
+        public CallableTask(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public String call() throws Exception {
+            Thread.sleep(1000);
+            //返回执行当前 Callable 的线程名字
+            return Thread.currentThread().getName();
+        }
+    }
+
+    public static class Task implements Runnable {
+        private String name;
+
+        public Task(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public void run() {
+            System.out.println(Thread.currentThread().getName()
+                    + " Start. Time = " + LocalDateTime.now());
+
+            processCommand();
+
+            System.out.println(Thread.currentThread().getName()
+                    + " End. Time = " + LocalDateTime.now());
+        }
+
+        private void processCommand() {
+            try {
+                Thread.sleep(5000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+
+        @Override
+        public String toString() {
+            return this.name;
+        }
+    }
+}</code></pre>
+</div>
+</div>
 </div>
 <div class="sect2">
-<h3 id="_参考资料"><a class="anchor" href="#_参考资料"></a>1.5. 参考资料</h3>
+<h3 id="_参考资料"><a class="anchor" href="#_参考资料"></a>1.6. 参考资料</h3>
 <div class="olist arabic">
 <ol class="arabic">
 <li>
-<p>[Java并发包源码学习之线程池（一）ThreadPoolExecutor源码分析 - Jindong](<a href="http://jindong.io/2015/03/30/java-concurrent-package-ThreadPoolExecutor/" class="bare">http://jindong.io/2015/03/30/java-concurrent-package-ThreadPoolExecutor/</a>)</p>
+<p><a href="http://jindong.io/2015/03/30/java-concurrent-package-ThreadPoolExecutor/">Java并发包源码学习之线程池（一）ThreadPoolExecutor源码分析 - Jindong</a></p>
 </li>
 <li>
-<p>[ThreadPoolExecutor简介与源码分析 - 邹胜群的个人页面 - 开源中国社区](<a href="http://my.oschina.net/zouqun/blog/407149" class="bare">http://my.oschina.net/zouqun/blog/407149</a>)</p>
+<p><a href="http://my.oschina.net/zouqun/blog/407149">ThreadPoolExecutor简介与源码分析 - 邹胜群的个人页面 - 开源中国社区</a></p>
 </li>
 <li>
-<p>[Java并发源码分析 - ThreadPoolExecutor - SHOW ME THE CODE](<a href="http://onlychoice.github.io/blog/2013/09/13/java-concurrent-source-code-reading-2/" class="bare">http://onlychoice.github.io/blog/2013/09/13/java-concurrent-source-code-reading-2/</a>)</p>
+<p><a href="http://onlychoice.github.io/blog/2013/09/13/java-concurrent-source-code-reading-2/">Java并发源码分析 - ThreadPoolExecutor - SHOW ME THE CODE</a></p>
 </li>
 <li>
-<p>[Java线程池架构原理和源码解析(ThreadPoolExecutor) - xieyuooo的专栏 - 博客频道 - CSDN.NET](<a href="http://blog.csdn.net/xieyuooo/article/details/8718741" class="bare">http://blog.csdn.net/xieyuooo/article/details/8718741</a>)</p>
+<p><a href="http://blog.csdn.net/xieyuooo/article/details/8718741">Java线程池架构原理和源码解析(ThreadPoolExecutor) - xieyuooo的专栏 - 博客频道 - CSDN.NET</a></p>
 </li>
 <li>
-<p>[Java多线程系列目录(共43篇) - 如果天空不死 - 博客园](<a href="http://www.cnblogs.com/skywang12345/p/java_threads_category.html" class="bare">http://www.cnblogs.com/skywang12345/p/java_threads_category.html</a>)</p>
-</li>
+<p><a href="http://www.cnblogs.com/skywang12345/p/java_threads_category.html">Java多线程系列目录(共43篇) - 如果天空不死 - 博客园</a></p>
+<div class="olist loweralpha">
+<ol class="loweralpha" type="a">
 <li>
 <p>搞清楚了 <code>ctl</code> 的含义，高三位是状态，低29位是线程数</p>
 </li>
@@ -625,35 +870,44 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <li>
 <p>带返回值的任务的实现方式，<code>Callable</code>，<code>Future</code></p>
 </li>
-<li>
-<p>[ThreadPoolExecutor的基本使用 | 三石·道](<a href="http://www.molotang.com/articles/514.html" class="bare">http://www.molotang.com/articles/514.html</a>)</p>
+</ol>
+</div>
 </li>
 <li>
-<p>[ThreadPoolExecutor的任务提交、任务处理、线程复用和维护相关源码分析 | 三石·道](<a href="http://www.molotang.com/articles/522.html" class="bare">http://www.molotang.com/articles/522.html</a>)</p>
+<p><a href="http://www.molotang.com/articles/514.html">ThreadPoolExecutor的基本使用 | 三石·道</a></p>
 </li>
 <li>
-<p>[ThreadPoolExecutor的生命周期相关源码分析 | 三石·道](<a href="http://www.molotang.com/articles/526.html" class="bare">http://www.molotang.com/articles/526.html</a>)</p>
+<p><a href="http://www.molotang.com/articles/522.html">ThreadPoolExecutor的任务提交、任务处理、线程复用和维护相关源码分析 | 三石·道</a></p>
 </li>
 <li>
-<p>[ThreadPoolExecutor的任务饱和丢弃策略及源码实现 | 三石·道](<a href="http://www.molotang.com/articles/553.html" class="bare">http://www.molotang.com/articles/553.html</a>)</p>
+<p><a href="http://www.molotang.com/articles/526.html">ThreadPoolExecutor的生命周期相关源码分析 | 三石·道</a></p>
 </li>
 <li>
-<p>[聊聊并发（三）Java线程池的分析和使用 | 并发编程网 - ifeve.com](<a href="http://ifeve.com/java-threadpool/" class="bare">http://ifeve.com/java-threadpool/</a>)</p>
+<p><a href="http://www.molotang.com/articles/553.html">ThreadPoolExecutor的任务饱和丢弃策略及源码实现 | 三石·道</a></p>
 </li>
 <li>
-<p>[戏（细）说Executor框架线程池任务执行全过程（上）](<a href="http://www.infoq.com/cn/articles/executor-framework-thread-pool-task-execution-part-01?utm_campaign=rightbar_v2&amp;utm_source=infoq&amp;utm_medium=articles_link&amp;utm_content=link_text" class="bare">http://www.infoq.com/cn/articles/executor-framework-thread-pool-task-execution-part-01?utm_campaign=rightbar_v2&amp;utm_source=infoq&amp;utm_medium=articles_link&amp;utm_content=link_text</a>)</p>
+<p><a href="http://ifeve.com/java-threadpool/">聊聊并发（三）Java线程池的分析和使用 | 并发编程网 - ifeve.com</a></p>
 </li>
 <li>
-<p>[戏（细）说Executor框架线程池任务执行全过程（下）](<a href="http://www.infoq.com/cn/articles/executor-framework-thread-pool-task-execution-part-02?utm_campaign=rightbar_v2&amp;utm_source=infoq&amp;utm_medium=articles_link&amp;utm_content=link_text" class="bare">http://www.infoq.com/cn/articles/executor-framework-thread-pool-task-execution-part-02?utm_campaign=rightbar_v2&amp;utm_source=infoq&amp;utm_medium=articles_link&amp;utm_content=link_text</a>)</p>
+<p><a href="http://www.infoq.com/cn/articles/executor-framework-thread-pool-task-execution-part-01?utm_campaign=rightbar_v2&amp;utm_source=infoq&amp;utm_medium=articles_link&amp;utm_content=link_text">戏（细）说Executor框架线程池任务执行全过程（上）</a></p>
 </li>
 <li>
-<p>[ThreadPoolExecutor 源码分析 - techq&#8217;s blog - 博客频道 - CSDN.NET](<a href="http://blog.csdn.net/techq/article/details/6818201" class="bare">http://blog.csdn.net/techq/article/details/6818201</a>)</p>
+<p><a href="http://www.infoq.com/cn/articles/executor-framework-thread-pool-task-execution-part-02?utm_campaign=rightbar_v2&amp;utm_source=infoq&amp;utm_medium=articles_link&amp;utm_content=link_text">戏（细）说Executor框架线程池任务执行全过程（下）</a></p>
 </li>
 <li>
-<p>[JAVA线程池(ThreadPoolExecutor)源码分析_journeylin_新浪博客](<a href="http://blog.sina.com.cn/s/blog_753035050100wbtm.html" class="bare">http://blog.sina.com.cn/s/blog_753035050100wbtm.html</a>)</p>
+<p><a href="http://blog.csdn.net/techq/article/details/6818201">ThreadPoolExecutor 源码分析 - techq’s blog - 博客频道 - CSDN.NET</a></p>
 </li>
 <li>
-<p>[ThreadPoolExecutor源码分析 - rilley - 博客园](<a href="http://www.cnblogs.com/rilley/archive/2012/02/07/2341767.html" class="bare">http://www.cnblogs.com/rilley/archive/2012/02/07/2341767.html</a>)</p>
+<p><a href="http://blog.sina.com.cn/s/blog_753035050100wbtm.html">JAVA线程池(ThreadPoolExecutor)源码分析_journeylin_新浪博客</a></p>
+</li>
+<li>
+<p><a href="http://www.cnblogs.com/rilley/archive/2012/02/07/2341767.html">ThreadPoolExecutor源码分析 - rilley - 博客园</a></p>
+</li>
+<li>
+<p><a href="http://calvin1978.blogcn.com/articles/java-threadpool.html">Java ThreadPool的正确打开方式 | 江南白衣</a></p>
+</li>
+<li>
+<p><a href="http://calvin1978.blogcn.com/articles/tomcat-threadpool.html">Tomcat线程池，更符合大家想象的可扩展线程池 | 江南白衣</a></p>
 </li>
 </ol>
 </div>
@@ -663,7 +917,7 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2019-11-23 14:33:46 +0800
+Last updated 2020-03-31 16:06:49 +0800
 </div>
 </div>
 </body>
