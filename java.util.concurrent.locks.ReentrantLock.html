@@ -454,6 +454,9 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 <div class="sect1">
 <h2 id="_reentrantlock"><a class="anchor" href="#_reentrantlock"></a>1. ReentrantLock</h2>
 <div class="sectionbody">
+<div class="paragraph">
+<p><code>ReentrantLock</code> 是重入锁，也是排他锁。</p>
+</div>
 <div class="sect2">
 <h3 id="_谈谈_synchronized_和_reentrantlock_的区别"><a class="anchor" href="#_谈谈_synchronized_和_reentrantlock_的区别"></a>1.1. 谈谈 synchronized 和 ReentrantLock 的区别</h3>
 <div class="olist arabic">
@@ -503,6 +506,7 @@ body.book #toc,body.book #preamble,body.book h1.sect0,body.book .sect1>h2{page-b
 
 import org.junit.Test;
 
+import java.time.LocalDateTime;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -596,7 +600,7 @@ public class ReentrantLockTest {
 
     @Test
     public void testCondition() throws InterruptedException {
-        Lock lock = new ReentrantLock();
+        ReentrantLock lock = new ReentrantLock();
         Condition condition = lock.newCondition();
         Thread thread = new Thread(new ConditionTask(lock, condition));
         thread.start();
@@ -629,6 +633,45 @@ public class ReentrantLockTest {
         }
     }
 
+    @Test
+    public void testExclusive() throws InterruptedException {
+        ReentrantLock lock = new ReentrantLock(true);
+        Thread t1 = new Thread("t1") {
+            @Override
+            public void run() {
+                try {
+                    lock.lock();
+                    System.out.println("t1 : " + LocalDateTime.now());
+                    Thread.sleep(10000);
+                } catch (Throwable throwable) {
+                    throwable.printStackTrace();
+                } finally {
+                    lock.unlock();
+                }
+            }
+        };
+        t1.start();
+
+        Thread.sleep(10);
+
+        Thread t2 = new Thread("t2") {
+            @Override
+            public void run() {
+                try {
+                    lock.lock();
+                    System.out.println("t2 : " + LocalDateTime.now());
+                } catch (Throwable throwable) {
+                    throwable.printStackTrace();
+                } finally {
+                    lock.unlock();
+                }
+            }
+        };
+        t2.start();
+
+        Thread.sleep(15000);
+        System.out.println("DONE");
+    }
 }</code></pre>
 </div>
 </div>
@@ -638,7 +681,7 @@ public class ReentrantLockTest {
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2020-03-31 16:06:49 +0800
+Last updated 2020-04-01 14:33:12 +0800
 </div>
 </div>
 </body>
